@@ -25,54 +25,76 @@ class AutoReaderMod(loader.Module):
 
     def __init__(self):
         self.config = loader.ModuleConfig(
-            "CHATS", [], lambda: "Список чатов для авточиталки."
+            "CHATS", {}, lambda: "Словарь чатов для авточиталки (ID: название)."
         )
 
     async def client_ready(self, client, db):
         self.client = client
 
     def get_display_name(self, entity):
-        if isinstance(entity, User):
-            return f"{entity.first_name or ''} {entity.last_name or ''}".strip()
-        if isinstance(entity, (Chat, Channel)):
+        if hasattr(entity, 'title'):
             return entity.title
+        if hasattr(entity, 'first_name') or hasattr(entity, 'last_name'):
+            return f"{entity.first_name or ''} {entity.last_name or ''}".strip()
         return str(entity)
 
     @loader.command()
     async def autoread(self, message):
-        """Добавляет указанный чат в список авточиталки. Использование: .autoread [chat_id или @username] (если чат не указан, используется текущий чат)."""
+        """Добавляет указанный чат в список авточиталки."""
         args = utils.get_args_raw(message)
-        chat = await self.client.get_entity(args) if args else await message.get_chat()
+        try:
+            chat = await self.client.get_entity(args) if args else await message.get_chat()
+        except ValueError:
+            await message.edit("❌ Не удалось найти указанный чат.")
+            return
+
         chat_id = chat.id
         chat_title = self.get_display_name(chat)
-        auto_read_chats = self.config["CHATS"]
 
-        if chat_id not in auto_read_chats:
-            auto_read_chats.append(chat_id)
-            self.config["CHATS"] = auto_read_chats
-            await message.edit(f"✅Чат '{chat_title}' добавлен в список авточиталки")
-        else:
-            await message.edit(f"ℹ️Чат '{chat_title}' уже находится в списке авточиталки.")
+        if chat_id in self.config["CHATS"]:
+            await message.edit(f"ℹ️ Чат '{chat_title}' уже находится в списке авточиталки.")
+            return
+
+        self.config["CHATS"][chat_id] = chat_title
+        self.save_config()
+        await message.edit(f"✅ Чат '{chat_title}' добавлен в авточиталку.")
 
     @loader.command()
     async def unautoread(self, message):
-        """Удаляет указанный чат из списка авточиталки. Использование: .unautoread [chat_id или @username] (если чат не указан, используется текущий чат)."""
+        """Удаляет указанный чат из списка авточиталки."""
         args = utils.get_args_raw(message)
-        chat = await self.client.get_entity(args) if args else await message.get_chat()
+        try:
+            chat = await self.client.get_entity(args) if args else await message.get_chat()
+        except ValueError:
+            await message.edit("❌ Не удалось найти указанный чат.")
+            return
+
         chat_id = chat.id
         chat_title = self.get_display_name(chat)
-        auto_read_chats = self.config["CHATS"]
 
-        if chat_id in auto_read_chats:
-            auto_read_chats.remove(chat_id)
-            self.config["CHATS"] = auto_read_chats
-            await message.edit(f"✅Чат '{chat_title}' удален из списка авточиталки.")
-        else:
-            await message.edit(f"❌Чат '{chat_title}' отсутствует в списке авточиталки.")
+        if chat_id not in self.config["CHATS"]:
+            await message.edit(f"❌ Чат '{chat_title}' отсутствует в списке авточиталки.")
+            return
+
+        del self.config["CHATS"][chat_id]
+        self.save_config()
+        await message.edit(f"✅ Чат '{chat_title}' удален из авточиталки.")
+
+    @loader.command()
+    async def autoreadlist(self, message):
+        """Показывает список чатов в авточиталке."""
+        if not self.config["CHATS"]:
+            await message.edit("ℹ️ Список чатов для авточиталки пуст.")
+            return
+
+        chats_info = [f"{title} (ID: {id})" for id, title in self.config["CHATS"].items()]
+        await message.edit("📋 Список чатов в авточиталке:\n" + "\n".join(chats_info))
 
     @loader.watcher()
     async def watcher(self, message):
         chat_id = utils.get_chat_id(message)
         if chat_id in self.config["CHATS"]:
-            async for msg in self.client.iter_messages(chat_id, limit=1):
-                await msg.mark_read()
+            try:
+                await message.mark_read()
+            except Exception as e:
+                logger.error(f"Ошибка при отметке сообщения как прочитанного: {e}")
